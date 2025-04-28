@@ -75,4 +75,29 @@ This section tracks the implementation progress of core features:
         ```
 
 3.  **Install dependencies:**
-    *(Ensure the
+    *(Ensure the `requirements.txt` file is present in the repository. If not, you may need to create it based on the project's needs, e.g., `pip freeze > requirements.txt` after installing packages like Pygame).*
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+---
+
+## How to Run
+
+1.  Make sure your game controller is connected *before* running the script.
+2.  Navigate to the project directory in your terminal.
+3.  Ensure your virtual environment is activated (if you created one).
+4.  Run the main script:
+    ```bash
+    python main.py
+    ```
+    *(Note: The entry point script `main.py` might change as the project evolves.)*
+
+---
+
+## Next Steps
+
+* Refine map implementation and add more detail.
+* Develop the item collection mechanic.
+* Create UI elements (e.g., score, collected items).
+* Design final sprites and assets.
