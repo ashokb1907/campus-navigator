@@ -1,209 +1,230 @@
 import pygame
 import sys
-import math # Needed for joystick deadzone calculation
+import os
+from map_class import Map # Assuming map_class.py is in the same directory
 
 # --- Constants ---
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
-PLAYER_SIZE = 30
-PLAYER_SPEED = 5
-JOYSTICK_DEADZONE = 0.4 # Threshold below which joystick motion is ignored
+# TILE_SIZE is now primarily for reference or if game logic needs a fixed tile dimension.
+# The actual tile dimensions are loaded from map_meta.json by the Map class.
+# Ensure this matches the size used in convert_map_to_tiles.py (e.g., 64).
+REFERENCE_TILE_SIZE = 64
+ZOOM_SPEED_MULTIPLIER = 1.1 # Factor for zooming in/out
 
 # --- Colors ---
 WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-RED = (255, 0, 0)
-BLUE = (0, 0, 255) # Player color for now
+BLUE = (0, 0, 255) # Player color
 
-# --- Player Class ---
+# --- Player Class (Manages world position) ---
 class Player(pygame.sprite.Sprite):
-    """ Represents the player character """
-    def __init__(self):
-        super().__init__() # Call the parent class (Sprite) constructor
-
-        # Create the player's visual representation (a blue square for now)
-        self.image = pygame.Surface([PLAYER_SIZE, PLAYER_SIZE])
+    def __init__(self, initial_world_x, initial_world_y):
+        super().__init__()
+        self.image = pygame.Surface([20, 20]) # Visual size of player
         self.image.fill(BLUE)
+        self.image.set_colorkey((0,0,0)) # Optional: if you want a black background to be transparent
+        # self.image = pygame.transform.scale(pygame.image.load("player_sprite.png").convert_alpha(), (20,20)) # Example with sprite
 
-        # Get the rectangle that defines the sprite's boundaries and position
-        self.rect = self.image.get_rect()
+        # The rect is for drawing the player AT THE SCREEN CENTER
+        self.rect = self.image.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
 
-        # Set the initial position (center of the screen)
-        self.rect.centerx = SCREEN_WIDTH // 2
-        self.rect.centery = SCREEN_HEIGHT // 2
+        # Player's precise position in the game world (in pixels, not tiles)
+        self.world_x = float(initial_world_x)
+        self.world_y = float(initial_world_y)
+        
+        self.speed = 200 # World pixels per second
+        self.direction = pygame.math.Vector2(0, 0)
 
-        # Store movement vectors (how much to change x and y each frame)
-        self.change_x = 0
-        self.change_y = 0
+    # Inside Player class in main.py
+    def update(self, dt, game_map_instance): # dt is delta time
+        if self.direction.length_squared() == 0:
+            return # No movement requested
 
-    def update(self):
-        """ Update the player's position based on the current movement vectors """
-        # Move left/right
-        self.rect.x += self.change_x
-        # Move up/down
-        self.rect.y += self.change_y
+        normalized_direction = self.direction.normalize()
 
-        # --- Boundary Checking ---
-        # Prevent the player from moving off the screen
-        if self.rect.right > SCREEN_WIDTH:
-            self.rect.right = SCREEN_WIDTH
-        if self.rect.left < 0:
-            self.rect.left = 0
-        if self.rect.bottom > SCREEN_HEIGHT:
-            self.rect.bottom = SCREEN_HEIGHT
-        if self.rect.top < 0:
-            self.rect.top = 0
+        # --- Proposed new position ---
+        # Calculate how much the player *wants* to move
+        move_x_amount = normalized_direction.x * self.speed * dt
+        move_y_amount = normalized_direction.y * self.speed * dt
 
-    # --- Movement Methods ---
-    def go_left(self):
-        """ Set horizontal speed to move left """
-        self.change_x = -PLAYER_SPEED
+        new_world_x = self.world_x + move_x_amount
+        new_world_y = self.world_y # Check X movement first
 
-    def go_right(self):
-        """ Set horizontal speed to move right """
-        self.change_x = PLAYER_SPEED
+        # --- Collision Detection for X-axis ---
+        # Determine the tile the player would be moving into
+        # Consider player's bounding box for more accuracy, for now, center point is simpler
+        # For better collision, you might want to check multiple points on the player's bounding box
 
-    def go_up(self):
-        """ Set vertical speed to move up """
-        self.change_y = -PLAYER_SPEED
+        # Get current tile of player
+        current_tile_x_idx = int(self.world_x / game_map_instance.tile_pixel_width)
+        current_tile_y_idx = int(self.world_y / game_map_instance.tile_pixel_height)
 
-    def go_down(self):
-        """ Set vertical speed to move down """
-        self.change_y = PLAYER_SPEED
+        # Get target tile based on new_world_x
+        target_tile_for_x_move_idx = int(new_world_x / game_map_instance.tile_pixel_width)
 
-    def stop_x(self):
-        """ Stop horizontal movement """
-        self.change_x = 0
+        if game_map_instance.is_tile_walkable(target_tile_for_x_move_idx, current_tile_y_idx):
+            self.world_x = new_world_x # Allow X movement
+        else:
+            # If moving into a wall on X, snap to edge of current tile or wall tile
+            # This prevents slight overlap.
+            if move_x_amount > 0: # Moving right
+                self.world_x = (target_tile_for_x_move_idx * game_map_instance.tile_pixel_width) - (self.rect.width / 2) - 0.1 # Epsilon
+            elif move_x_amount < 0: # Moving left
+                self.world_x = ((current_tile_x_idx) * game_map_instance.tile_pixel_width) + (self.rect.width / 2) + 0.1 # Epsilon
 
-    def stop_y(self):
-        """ Stop vertical movement """
-        self.change_y = 0
+
+        # --- Collision Detection for Y-axis ---
+        new_world_y = self.world_y + move_y_amount # Reset for Y check based on potentially updated self.world_x
+        current_tile_x_idx = int(self.world_x / game_map_instance.tile_pixel_width) # Re-evaluate current X tile
+        target_tile_for_y_move_idx = int(new_world_y / game_map_instance.tile_pixel_height)
+
+        if game_map_instance.is_tile_walkable(current_tile_x_idx, target_tile_for_y_move_idx):
+            self.world_y = new_world_y # Allow Y movement
+        else:
+            # If moving into a wall on Y, snap to edge
+            if move_y_amount > 0: # Moving down
+                self.world_y = (target_tile_for_y_move_idx * game_map_instance.tile_pixel_height) - (self.rect.height / 2) - 0.1
+            elif move_y_amount < 0: # Moving up
+                self.world_y = ((current_tile_y_idx) * game_map_instance.tile_pixel_height) + (self.rect.height / 2) + 0.1
+
+        # Optional: Clamp player to map boundaries (already present, keep it)
+        if game_map_instance and game_map_instance.full_map_pixel_width > 0:
+            player_half_width = self.rect.width / 2
+            player_half_height = self.rect.height / 2
+            self.world_x = max(player_half_width, min(self.world_x, game_map_instance.full_map_pixel_width - player_half_width))
+            self.world_y = max(player_half_height, min(self.world_y, game_map_instance.full_map_pixel_height - player_half_height))
+
+        self.rect.center = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
+
+    def set_movement_direction(self, input_direction_vector):
+        self.direction = input_direction_vector
+
 
 # --- Main Function ---
 def main():
-    """ Main program function """
-    pygame.init() # Initialize all Pygame modules
-
-    # --- Screen Setup ---
+    pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Campus Navigator Challenge - Phase 1")
+    pygame.display.set_caption("Campus Navigator")
+    clock = pygame.time.Clock()
 
-    # --- Controller Setup ---
-    joysticks = []
-    # Check for available joysticks and initialize them
-    for i in range(pygame.joystick.get_count()):
-        joystick = pygame.joystick.Joystick(i)
-        joystick.init()
-        joysticks.append(joystick)
-        print(f"Detected Joystick {i}: {joystick.get_name()}")
+    # --- Create Map ---
+    # "tiles" is the directory where map_meta.json and tile images are expected.
+    game_map = Map(screen, "tiles")
+    
+    if not game_map.tile_filenames_grid: # Check if map metadata loaded successfully
+        print("Map data failed to load properly. Exiting.")
+        pygame.quit()
+        sys.exit()
 
-    if not joysticks:
-        print("No joysticks detected. Using keyboard controls.")
-    else:
-        print("Joystick detected. Keyboard controls also available.")
+    # --- Create Player ---
+    # Start player in the center of the map (world coordinates)
+    initial_player_world_x = game_map.full_map_pixel_width / 2
+    initial_player_world_y = game_map.full_map_pixel_height / 2
+    player = Player(initial_player_world_x, initial_player_world_y)
+    
+    all_sprites = pygame.sprite.Group(player) # Group for easy drawing/updating
 
+    # --- Game Loop ---
+    running = True
+    pygame.event.set_allowed([pygame.QUIT, pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEBUTTONDOWN]) # Optimize event handling
 
-    # --- Sprite Management ---
-    all_sprites_list = pygame.sprite.Group()
-
-    # --- Create Player Instance ---
-    player = Player()
-    all_sprites_list.add(player) # Add the player to the sprite group
-
-    # --- Game Loop Variables ---
-    running = True # Controls the main game loop
-    clock = pygame.time.Clock() # Used to control game frame rate
-
-    # -------- Main Program Loop -----------
     while running:
-        # --- Event Processing ---
+        dt = clock.tick(60) / 1000.0  # Delta time in seconds (for frame-rate independence)
+
         for event in pygame.event.get():
-            if event.type == pygame.QUIT: # User clicked the close button
+            if event.type == pygame.QUIT:
                 running = False
-
-            # --- Joystick Input Handling ---
-            if joysticks:
-                # Analog stick movement
-                if event.type == pygame.JOYAXISMOTION:
-                    if event.axis == 0: # Horizontal axis
-                        if math.fabs(event.value) > JOYSTICK_DEADZONE:
-                            if event.value < 0: player.go_left()
-                            else: player.go_right()
-                        else: player.stop_x()
-                    elif event.axis == 1: # Vertical axis
-                        if math.fabs(event.value) > JOYSTICK_DEADZONE:
-                            if event.value < 0: player.go_up()
-                            else: player.go_down()
-                        else: player.stop_y()
-
-                # D-Pad (Hat) movement
-                elif event.type == pygame.JOYHATMOTION:
-                    hat_x, hat_y = event.value
-                    # Horizontal D-pad
-                    if hat_x == -1: player.go_left()
-                    elif hat_x == 1: player.go_right()
-                    else:
-                         # Stop only if not also moving via analog stick's X axis
-                         is_analog_x_active = any(math.fabs(j.get_axis(0)) > JOYSTICK_DEADZONE for j in joysticks)
-                         if not is_analog_x_active:
-                              player.stop_x()
-
-                    # Vertical D-pad (Inverted Y)
-                    if hat_y == 1: player.go_up()
-                    elif hat_y == -1: player.go_down()
-                    else:
-                         # Stop only if not also moving via analog stick's Y axis
-                         is_analog_y_active = any(math.fabs(j.get_axis(1)) > JOYSTICK_DEADZONE for j in joysticks)
-                         if not is_analog_y_active:
-                              player.stop_y()
-
-            # --- Keyboard Input Handling (Fallback / Alternative) ---
-            if event.type == pygame.KEYDOWN: # A key is pressed down
-                if event.key == pygame.K_LEFT:
-                    player.go_left()
-                elif event.key == pygame.K_RIGHT:
-                    player.go_right()
-                elif event.key == pygame.K_UP:
-                    player.go_up()
-                elif event.key == pygame.K_DOWN:
-                    player.go_down()
-                elif event.key == pygame.K_ESCAPE: # Allow quitting with Esc key
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
                     running = False
+                # Zooming with + and - keys (or = for +)
+                elif event.key == pygame.K_EQUALS or event.key == pygame.K_PLUS:
+                     # Zoom in, focused on player's screen position (center)
+                    game_map.zoom(ZOOM_SPEED_MULTIPLIER, player.rect.centerx, player.rect.centery)
+                elif event.key == pygame.K_MINUS:
+                     # Zoom out, focused on player's screen position (center)
+                    game_map.zoom(1 / ZOOM_SPEED_MULTIPLIER, player.rect.centerx, player.rect.centery)
 
-            elif event.type == pygame.KEYUP: 
-                # A key is released
-                # Stop movement only if the released key corresponds to the current direction
-                # and no other movement key in that axis is still pressed
-                # (This prevents stopping if holding Left then press/release Right)
-                # A simpler approach is just to stop if the key matches the direction,
-                # assuming only one key/direction is primary at a time for keyboard.
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                # Mouse wheel zoom
+                mouse_pos = pygame.mouse.get_pos()
+                if event.button == 4:  # Scroll up (zoom in)
+                    game_map.zoom(ZOOM_SPEED_MULTIPLIER, mouse_pos[0], mouse_pos[1])
+                elif event.button == 5:  # Scroll down (zoom out)
+                    game_map.zoom(1 / ZOOM_SPEED_MULTIPLIER, mouse_pos[0], mouse_pos[1])
+        
+        # Handle continuous key presses for movement
+        keys = pygame.key.get_pressed()
+        current_direction = pygame.math.Vector2(0, 0)
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+            current_direction.x -= 1
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+            current_direction.x += 1
+        if keys[pygame.K_UP] or keys[pygame.K_w]:
+            current_direction.y -= 1
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+            current_direction.y += 1
+        player.set_movement_direction(current_direction)
 
-                if event.key == pygame.K_LEFT and player.change_x < 0:
-                    player.stop_x()
-                elif event.key == pygame.K_RIGHT and player.change_x > 0:
-                    player.stop_x()
-                elif event.key == pygame.K_UP and player.change_y < 0:
-                    player.stop_y()
-                elif event.key == pygame.K_DOWN and player.change_y > 0:
-                    player.stop_y()
+        # --- Game Logic Update ---
+        player.update(dt, game_map) # Player moves in the world
 
+        # --- Update Map Offset to Center Player on Screen ---
+        # The map's top-left corner (offset_x, offset_y) needs to be positioned such that
+        # the player's world coordinates (player.world_x, player.world_y)
+        # end up at the player's screen rect center (SCREEN_WIDTH/2, SCREEN_HEIGHT/2).
+        #
+        # ScreenX = WorldX * Zoom + OffsetX
+        # PlayerScreenX = PlayerWorldX * Zoom + OffsetX
+        # OffsetX = PlayerScreenX - (PlayerWorldX * Zoom)
+        
+        game_map.offset_x = player.rect.centerx - (player.world_x * game_map.zoom_level)
+        game_map.offset_y = player.rect.centery - (player.world_y * game_map.zoom_level)
 
-        # --- Game Logic ---
-        all_sprites_list.update() # Calls the update() method on all sprites
+        # --- Drawing ---
+        screen.fill(WHITE)    # Clear screen
+        game_map.draw()       # Draw the map with current offset and zoom
+        all_sprites.draw(screen) # Draw player (and any other sprites)
+        
+        pygame.display.flip() # Update the full display
 
-        # --- Drawing Code ---
-        screen.fill(WHITE) # Draw the background
-        all_sprites_list.draw(screen) # Draw all sprites
-
-        # --- Update Screen ---
-        pygame.display.flip()
-
-        # --- Limit frames per second ---
-        clock.tick(60) # 60 FPS
-
-    # Close the window and quit.
     pygame.quit()
     sys.exit()
 
 if __name__ == "__main__":
-    main()
+    # Crucial Check: Ensure tiles and metadata exist before starting the game.
+    tiles_dir = "tiles"
+    meta_file = os.path.join(tiles_dir, "map_meta.json")
+
+    if not os.path.exists(meta_file):
+        print(f"Error: Metadata file '{meta_file}' not found.")
+        print(f"Please run 'python convert_map_to_tiles.py' first.")
+        print(f"Ensure 'campus_map.jpg' (or your map image) and 'convert_map_to_tiles.py' are configured correctly.")
+        
+        # Optional: Attempt to generate tiles if the map image exists
+        # This part is a convenience and might need adjustment based on your project structure
+        map_image_for_conversion = "campus_map.jpg" # Must match the one in convert_map_to_tiles.py
+        tile_size_for_conversion = REFERENCE_TILE_SIZE # Must match
+        if os.path.exists(map_image_for_conversion):
+            print(f"\nFound '{map_image_for_conversion}'. Attempting to generate tiles now...")
+            try:
+                # Directly call the function from the other script
+                # This requires convert_map_to_tiles.py to be importable
+                from convert_map_to_tiles import convert_map_to_tiles as tile_converter_func
+                tile_converter_func(
+                    map_image_for_conversion,
+                    tile_size_for_conversion,
+                    tile_size_for_conversion, # Assuming square tiles
+                    tiles_dir
+                )
+                if os.path.exists(meta_file):
+                     print("\nTile generation successful. Please try running main.py again.")
+                else:
+                    print("\nTile generation might have failed. Check output from convert_map_to_tiles.")
+            except ImportError:
+                print("Could not import 'convert_map_to_tiles'. Please run it manually.")
+            except Exception as e:
+                print(f"An error occurred during automatic tile generation: {e}")
+        sys.exit()
+    else:
+        main()
