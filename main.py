@@ -170,7 +170,8 @@ def main():
                 elif event.key == pygame.K_ESCAPE: # Allow quitting with Esc key
                     running = False
 
-            elif event.type == pygame.KEYUP: # A key is released
+            elif event.type == pygame.KEYUP: 
+                # A key is released
                 # Stop movement only if the released key corresponds to the current direction
                 # and no other movement key in that axis is still pressed
                 # (This prevents stopping if holding Left then press/release Right)
