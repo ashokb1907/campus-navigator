@@ -1,0 +1,53 @@
+\documentclass[12pt,a4paper]{article} % A4 paper size and 12pt font
+\usepackage[margin=1in]{geometry} % 1-inch margins on all sides
+\usepackage{setspace} % For line spacing
+\usepackage{titlesec} % For heading formatting
+\usepackage{fancyhdr} % For page numbering and headers/footers
+\usepackage{hyperref} % For hyperlinks
+\usepackage{tocloft} % For Table of Contents customization
+\usepackage{times} % Times New Roman font
+
+% Set line spacing to 1.5
+\onehalfspacing
+
+% Format chapter and section headings
+\titleformat{\section}{\bfseries\Large}{\thesection}{1em}{} % Section: Bold, large
+\titleformat{\subsection}{\bfseries\normalsize}{\thesubsection}{1em}{} % Subsection: Bold, normal size
+
+% Page numbering
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage} % Page number in the center of the footer
+
+% Title page
+\newcommand{\titlePage}{
+    \begin{titlepage}
+        \centering
+        \vspace*{2cm}
+        {\Huge\textbf{Campus Navigator Challenge}}\\ % Title of the project
+        \vspace{1.5cm}
+        {\Large\textbf{Literature Review}}\\ % Subtitle
+        \vspace{2cm}
+        {\Large Submitted by}\\
+        \vspace{0.5cm}
+        {\large Ashok B}\\ % Your name
+        \vfill
+        {\large Aston College}\\ % College name
+        \vspace{0.2cm}
+        {\large May 2025}\\ % Date
+    \end{titlepage}
+}
+
+\begin{document}
+
+% Add the title page
+\titlePage
+
+% Table of Contents
+\tableofcontents
+\newpage
+
+% Main content placeholder
+$body$
+
+\end{document}

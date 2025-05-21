@@ -1,264 +1,154 @@
 import pygame
-import sys
-import math # Needed for joystick deadzone calculation
+import os
+import json
 
-# --- Constants ---
-SCREEN_WIDTH = 800
-SCREEN_HEIGHT = 600
-PLAYER_SIZE = 30
-PLAYER_SPEED = 5
-JOYSTICK_DEADZONE = 0.4 # Threshold below which joystick motion is ignored
+class Map:
+    def __init__(self, screen, tile_directory):
+        self.screen = screen
+        self.tile_dir = tile_directory
+        self.tile_cache = {}  # Cache for loaded tile images (pygame.Surface objects)
 
-# --- Colors ---
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-RED = (255, 0, 0)
-BLUE = (0, 0, 255) # Player color
-GREY = (128, 128, 128) # Wall color
+        # Properties to be loaded from metadata
+        self.tile_pixel_width = 0
+        self.tile_pixel_height = 0
+        self.grid_width_in_tiles = 0
+        self.grid_height_in_tiles = 0
+        self.tile_filenames_grid = [] # 2D list of tile filenames in correct order
 
-# --- Wall Class ---
-class Wall(pygame.sprite.Sprite):
-    """ Represents an obstacle/wall on the map """
-    def __init__(self, x, y, width, height):
-        super().__init__() # Call the parent class (Sprite) constructor
+        self.load_map_metadata()
 
-        # Create the wall's visual representation (a grey rectangle)
-        self.image = pygame.Surface([width, height])
-        self.image.fill(GREY)
+        # Total map dimensions in pixels (at 1x zoom)
+        self.full_map_pixel_width = self.grid_width_in_tiles * self.tile_pixel_width
+        self.full_map_pixel_height = self.grid_height_in_tiles * self.tile_pixel_height
 
-        # Get the rectangle that defines the sprite's boundaries and position
-        self.rect = self.image.get_rect()
-        self.rect.x = x
-        self.rect.y = y
+        self.zoom_level = 1.0
+        self.offset_x = 0  # Top-left corner of the map relative to the screen's top-left
+        self.offset_y = 0
 
-# --- Player Class ---
-class Player(pygame.sprite.Sprite):
-    """ Represents the player character """
-    def __init__(self):
-        super().__init__() # Call the parent class (Sprite) constructor
+    # Inside Map class in map_class.py
+    # ... (other initializations) ...
+    # self.collision_grid = [] # Already there
 
-        # Create the player's visual representation (a blue square for now)
-        self.image = pygame.Surface([PLAYER_SIZE, PLAYER_SIZE])
-        self.image.fill(BLUE)
+    def load_map_metadata(self, meta_filename="map_meta.json"):
+        meta_file_path = os.path.join(self.tile_dir, meta_filename)
+        try:
+            with open(meta_file_path, 'r') as f:
+                metadata = json.load(f)
 
-        # Get the rectangle that defines the sprite's boundaries and position
-        self.rect = self.image.get_rect()
+            self.tile_pixel_width = metadata["tile_pixel_width"]
+            self.tile_pixel_height = metadata["tile_pixel_height"]
+            self.grid_width_in_tiles = metadata["grid_width_in_tiles"]
+            self.grid_height_in_tiles = metadata["grid_height_in_tiles"]
+            self.tile_filenames_grid = metadata["tile_filenames_grid"]
 
-        # Set the initial position (adjust if needed based on map)
-        self.rect.centerx = SCREEN_WIDTH // 2
-        self.rect.centery = SCREEN_HEIGHT // 2
+            # --- Load the collision grid ---
+            self.collision_grid = metadata.get("collision_grid_data") # Use .get for safety
+            if not self.collision_grid:
+                print("Warning: Collision grid data not found in metadata or is empty.")
+                print("Defaulting to all tiles walkable for safety (collision will be off).")
+                # Create a default all-walkable grid if missing
+                if self.grid_width_in_tiles > 0 and self.grid_height_in_tiles > 0:
+                    self.collision_grid = [[0 for _ in range(self.grid_width_in_tiles)] for _ in range(self.grid_height_in_tiles)]
+                else:
+                    self.collision_grid = [] # Should not happen if other metadata loaded
+            # --- End loading collision grid ---
 
-        # Store movement vectors (how much to change x and y each frame)
-        self.change_x = 0
-        self.change_y = 0
+            if not all([self.tile_pixel_width, self.tile_pixel_height, self.grid_width_in_tiles, self.grid_height_in_tiles, self.tile_filenames_grid]):
+                raise ValueError("Metadata is missing essential tile information.")
 
-        # List of sprites we can bump against
-        self.wall_list = None # Will be set later
+            print(f"Map metadata loaded: Grid {self.grid_width_in_tiles}x{self.grid_height_in_tiles}, Tile Size: {self.tile_pixel_width}x{self.tile_pixel_height}px")
+            if self.collision_grid:
+                print(f"Collision grid loaded with dimensions: {len(self.collision_grid)}x{len(self.collision_grid[0]) if self.collision_grid else 0}")
+        except FileNotFoundError:
+            print(f"Error: Metadata file '{meta_file_path}' not found in '{self.tile_dir}'.")
+            print("Please run the 'convert_map_to_tiles.py' script first.")
+            self.collision_grid = [] # Ensure it's empty on error
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            print(f"Error parsing metadata file '{meta_file_path}': {e}")
+            self.collision_grid = [] # Ensure it's empty on error
 
-    def update(self):
-        """ Update the player's position, handling collisions """
+    # The is_tile_walkable method you added previously should now work with this loaded grid.
+    def is_tile_walkable(self, tile_x_idx, tile_y_idx):
+        """Checks if a tile at given grid indices is walkable."""
+        if not self.collision_grid: # Safety check if grid didn't load
+            # print("Debug: is_tile_walkable called but no collision_grid exists. Defaulting to True.")
+            return True # Or False, depending on desired safety behavior
 
-        # --- Horizontal Movement & Collision ---
-        # Move left/right first
-        self.rect.x += self.change_x
+        if 0 <= tile_y_idx < len(self.collision_grid) and \
+        0 <= tile_x_idx < len(self.collision_grid[0]):
+            return self.collision_grid[tile_y_idx][tile_x_idx] == 0 # 0 means walkable
+        # print(f"Debug: is_tile_walkable called for out-of-bounds indices: x={tile_x_idx}, y={tile_y_idx}")
+        return False # Out of bounds is not walkable
 
-        # Check for collisions after horizontal movement
-        # *** UNCOMMENT THIS SECTION TO ENABLE COLLISION ***
-        # block_hit_list = pygame.sprite.spritecollide(self, self.wall_list, False)
-        # for block in block_hit_list:
-        #     # If moving right, snap to the left side of the block hit
-        #     if self.change_x > 0:
-        #         self.rect.right = block.rect.left
-        #     # If moving left, snap to the right side of the block hit
-        #     elif self.change_x < 0:
-        #         self.rect.left = block.rect.right
-        #     # Optional: Stop horizontal movement immediately on hit
-        #     # self.stop_x()
+    def get_tile_image(self, tile_filename):
+        """Loads a tile image if not cached, then returns it. Handles transparency."""
+        if not tile_filename:
+            return None
+        if tile_filename not in self.tile_cache:
+            try:
+                tile_path = os.path.join(self.tile_dir, tile_filename)
+                # Use convert_alpha() for images with transparency (like PNGs often have)
+                # Use convert() if you are sure your tiles have no alpha.
+                image = pygame.image.load(tile_path).convert_alpha()
+                self.tile_cache[tile_filename] = image
+            except pygame.error as e:
+                print(f"Error loading tile image: {tile_filename} from {tile_path} - {e}")
+                self.tile_cache[tile_filename] = None # Mark as failed
+        return self.tile_cache[tile_filename]
 
-        # --- Vertical Movement & Collision ---
-        # Move up/down next
-        self.rect.y += self.change_y
+    def draw(self):
+        if not self.tile_filenames_grid or self.tile_pixel_width == 0:
+            # print("No tile data to draw or tile size is zero.")
+            return
 
-        # Check for collisions after vertical movement
-        # *** UNCOMMENT THIS SECTION TO ENABLE COLLISION ***
-        # block_hit_list = pygame.sprite.spritecollide(self, self.wall_list, False)
-        # for block in block_hit_list:
-        #     # If moving down, snap to the top side of the block hit
-        #     if self.change_y > 0:
-        #         self.rect.bottom = block.rect.top
-        #     # If moving up, snap to the bottom side of the block hit
-        #     elif self.change_y < 0:
-        #         self.rect.top = block.rect.bottom
-        #     # Optional: Stop vertical movement immediately on hit
-        #     # self.stop_y()
+        screen_rect = self.screen.get_rect()
+        current_scaled_tile_width = int(self.tile_pixel_width * self.zoom_level)
+        current_scaled_tile_height = int(self.tile_pixel_height * self.zoom_level)
 
+        if current_scaled_tile_width <= 0 or current_scaled_tile_height <= 0:
+            return # Cannot draw tiles with no size
 
-        # --- Boundary Checking (Screen edges) ---
-        if self.rect.right > SCREEN_WIDTH:
-            self.rect.right = SCREEN_WIDTH
-        if self.rect.left < 0:
-            self.rect.left = 0
-        if self.rect.bottom > SCREEN_HEIGHT:
-            self.rect.bottom = SCREEN_HEIGHT
-        if self.rect.top < 0:
-            self.rect.top = 0
+        for row_idx, tile_row in enumerate(self.tile_filenames_grid):
+            for col_idx, tile_filename in enumerate(tile_row):
+                original_tile_surface = self.get_tile_image(tile_filename)
+                if not original_tile_surface:
+                    continue
 
-    # --- Movement Methods (Unchanged) ---
-    def go_left(self): self.change_x = -PLAYER_SPEED
-    def go_right(self): self.change_x = PLAYER_SPEED
-    def go_up(self): self.change_y = -PLAYER_SPEED
-    def go_down(self): self.change_y = PLAYER_SPEED
-    def stop_x(self): self.change_x = 0
-    def stop_y(self): self.change_y = 0
+                # Calculate tile's top-left position on the screen
+                draw_x = self.offset_x + (col_idx * current_scaled_tile_width)
+                draw_y = self.offset_y + (row_idx * current_scaled_tile_height)
 
-# --- Main Function ---
-def main():
-    """ Main program function """
-    pygame.init() # Initialize all Pygame modules
+                # Basic Culling: Check if the tile is on screen before scaling and blitting
+                tile_on_screen_rect = pygame.Rect(draw_x, draw_y, current_scaled_tile_width, current_scaled_tile_height)
+                if not screen_rect.colliderect(tile_on_screen_rect):
+                    continue
 
-    # --- Screen Setup ---
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Campus Navigator Challenge - Aston Map")
+                # Scale the tile if zoom level requires it
+                if self.zoom_level == 1.0:
+                    image_to_draw = original_tile_surface
+                else:
+                    # For better performance, you might cache scaled versions of tiles
+                    # if zoom levels are discrete or change infrequently.
+                    # pygame.transform.smoothscale is generally better quality for shrinking/growing
+                    image_to_draw = pygame.transform.smoothscale(
+                        original_tile_surface,
+                        (current_scaled_tile_width, current_scaled_tile_height)
+                    )
+                
+                self.screen.blit(image_to_draw, (draw_x, draw_y))
 
-    # --- Controller Setup (Unchanged) ---
-    joysticks = []
-    for i in range(pygame.joystick.get_count()):
-        joystick = pygame.joystick.Joystick(i)
-        joystick.init()
-        joysticks.append(joystick)
-        print(f"Detected Joystick {i}: {joystick.get_name()}")
-    if not joysticks: print("No joysticks detected. Using keyboard controls.")
-    else: print("Joystick detected. Keyboard controls also available.")
+    def zoom(self, zoom_increment_factor, screen_focus_px, screen_focus_py):
+        """
+        Zooms the map, keeping the point (screen_focus_px, screen_focus_py)
+        on the screen stable.
+        """
+        # World coordinates (pixels on the full unzoomed map) of the focus point before zoom
+        world_focus_x = (screen_focus_px - self.offset_x) / self.zoom_level
+        world_focus_y = (screen_focus_py - self.offset_y) / self.zoom_level
 
-    # --- Sprite Management ---
-    all_sprites_list = pygame.sprite.Group()
-    wall_list = pygame.sprite.Group() # Group specifically for walls
+        self.zoom_level *= zoom_increment_factor
+        self.zoom_level = max(0.1, min(self.zoom_level, 10.0)) # Clamp zoom
 
-    # --- Create Walls ---
-    # Define wall coordinates [x, y, width, height] based on Aston Map PDF
-    # *** THESE ARE ESTIMATES - ADJUST AS NEEDED ***
-    wall_coords = [
-        # Borders (optional, but good practice)
-        [0, 0, SCREEN_WIDTH, 10],         # Top border
-        [0, SCREEN_HEIGHT - 10, SCREEN_WIDTH, 10], # Bottom border
-        [0, 10, 10, SCREEN_HEIGHT - 20],  # Left border
-        [SCREEN_WIDTH - 10, 10, 10, SCREEN_HEIGHT - 20], # Right border
-
-        # Main Building Complex (Approx area 1, 2, 3) - Large, slightly left of center
-        [180, 80, 200, 180],
-
-        # Aston Business School / Conf Center (5) - Right of Main Building
-        [400, 150, 150, 100],
-
-        # Library (6) - South of ABS
-        [420, 270, 120, 80],
-
-        # Vision Sciences / Medical / Audiology (9) - South East area
-        [450, 380, 150, 120],
-
-        # Woodcock Sports Centre (10) - South East, below Vision Sci
-        [480, 510, 180, 80],
-
-        # EBRI (14) - Top Right area
-        [500, 80, 100, 80],
-
-        # Engineering Academy (16) - Far Top Right
-        [650, 100, 120, 150],
-
-        # Student Union (4) - Between Main Bldg and ABS
-        [385, 100, 50, 40],
-
-        # MLK Centre (15) - South West, near bottom road
-        [150, 450, 80, 80],
-
-        # Accommodation Blocks (Approx area 18, 19) - West side
-        [50, 150, 100, 250],
-
-        # Accommodation Block (Approx area 22) - Far West, near Coleshill St
-        [20, 350, 80, 150],
-
-        # Accommodation Blocks (Approx area 20, 21) - South West
-        [250, 480, 150, 100],
-
-        # Shops Area (39) - West of Main Building
-        [120, 100, 50, 80],
-
-    ]
-
-    # Create Wall objects from coordinates and add to groups
-    for coords in wall_coords:
-        wall = Wall(coords[0], coords[1], coords[2], coords[3])
-        wall_list.add(wall)
-        all_sprites_list.add(wall) # Add walls to the main drawing group too
-
-    # --- Create Player Instance ---
-    player = Player()
-    player.wall_list = wall_list # Give the player a reference to the walls
-    all_sprites_list.add(player)
-
-    # --- Game Loop Variables ---
-    running = True
-    clock = pygame.time.Clock()
-
-    # -------- Main Program Loop -----------
-    while running:
-        # --- Event Processing (Unchanged) ---
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT: running = False
-            # Joystick Input
-            if joysticks:
-                if event.type == pygame.JOYAXISMOTION:
-                    if event.axis == 0:
-                        if math.fabs(event.value) > JOYSTICK_DEADZONE:
-                            if event.value < 0: player.go_left()
-                            else: player.go_right()
-                        else: player.stop_x()
-                    elif event.axis == 1:
-                        if math.fabs(event.value) > JOYSTICK_DEADZONE:
-                            if event.value < 0: player.go_up()
-                            else: player.go_down()
-                        else: player.stop_y()
-                elif event.type == pygame.JOYHATMOTION:
-                    hat_x, hat_y = event.value
-                    if hat_x == -1: player.go_left()
-                    elif hat_x == 1: player.go_right()
-                    else:
-                         is_analog_x_active = any(math.fabs(j.get_axis(0)) > JOYSTICK_DEADZONE for j in joysticks)
-                         if not is_analog_x_active: player.stop_x()
-                    if hat_y == 1: player.go_up()
-                    elif hat_y == -1: player.go_down()
-                    else:
-                         is_analog_y_active = any(math.fabs(j.get_axis(1)) > JOYSTICK_DEADZONE for j in joysticks)
-                         if not is_analog_y_active: player.stop_y()
-            # Keyboard Input
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_LEFT: player.go_left()
-                elif event.key == pygame.K_RIGHT: player.go_right()
-                elif event.key == pygame.K_UP: player.go_up()
-                elif event.key == pygame.K_DOWN: player.go_down()
-                elif event.key == pygame.K_ESCAPE: running = False
-            elif event.type == pygame.KEYUP:
-                if event.key == pygame.K_LEFT and player.change_x < 0: player.stop_x()
-                elif event.key == pygame.K_RIGHT and player.change_x > 0: player.stop_x()
-                elif event.key == pygame.K_UP and player.change_y < 0: player.stop_y()
-                elif event.key == pygame.K_DOWN and player.change_y > 0: player.stop_y()
-
-        # --- Game Logic ---
-        all_sprites_list.update() # Calls update() on player and walls
-
-        # --- Drawing Code ---
-        screen.fill(WHITE) # Draw the background
-        all_sprites_list.draw(screen) # Draw player and walls
-
-        # --- Update Screen ---
-        pygame.display.flip()
-
-        # --- Limit frames per second ---
-        clock.tick(60)
-
-    # Close the window and quit.
-    pygame.quit()
-    sys.exit()
-
-if __name__ == "__main__":
-    main()
+        # New offset to keep the world focus point at the same screen position
+        self.offset_x = screen_focus_px - (world_focus_x * self.zoom_level)
+        self.offset_y = screen_focus_py - (world_focus_y * self.zoom_level)

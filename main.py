@@ -1,208 +1,275 @@
 import pygame
 import sys
-import math # Needed for joystick deadzone calculation
+import os
+from map_class import Map # Assuming map_class.py is in the same directory
 
 # --- Constants ---
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
-PLAYER_SIZE = 30
-PLAYER_SPEED = 5
-JOYSTICK_DEADZONE = 0.4 # Threshold below which joystick motion is ignored
+REFERENCE_TILE_SIZE = 32 # Ensure this matches the size used in convert_map_to_tiles.py
+ZOOM_SPEED_MULTIPLIER = 1.1
 
 # --- Colors ---
 WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-RED = (255, 0, 0)
-BLUE = (0, 0, 255) # Player color for now
+BLUE = (0, 0, 255) # Player color
 
-# --- Player Class ---
+# --- Player Class (Manages world position) ---
 class Player(pygame.sprite.Sprite):
-    """ Represents the player character """
-    def __init__(self):
-        super().__init__() # Call the parent class (Sprite) constructor
-
-        # Create the player's visual representation (a blue square for now)
-        self.image = pygame.Surface([PLAYER_SIZE, PLAYER_SIZE])
+    def __init__(self, initial_world_x, initial_world_y):
+        super().__init__()
+        self.image = pygame.Surface([20, 20]) # Visual size of player
         self.image.fill(BLUE)
+        self.image.set_colorkey((0,0,0)) 
 
-        # Get the rectangle that defines the sprite's boundaries and position
-        self.rect = self.image.get_rect()
+        self.rect = self.image.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
+        self.world_x = float(initial_world_x)
+        self.world_y = float(initial_world_y)
+        self.speed = 200
+        self.direction = pygame.math.Vector2(0, 0)
 
-        # Set the initial position (center of the screen)
-        self.rect.centerx = SCREEN_WIDTH // 2
-        self.rect.centery = SCREEN_HEIGHT // 2
+    def update(self, dt, game_map_instance):
+        if self.direction.length_squared() == 0:
+            return
 
-        # Store movement vectors (how much to change x and y each frame)
-        self.change_x = 0
-        self.change_y = 0
+        try:
+            normalized_direction = self.direction.normalize()
+        except ValueError:
+            normalized_direction = pygame.math.Vector2(0, 0)
 
-    def update(self):
-        """ Update the player's position based on the current movement vectors """
-        # Move left/right
-        self.rect.x += self.change_x
-        # Move up/down
-        self.rect.y += self.change_y
+        move_x_amount = normalized_direction.x * self.speed * dt
+        move_y_amount = normalized_direction.y * self.speed * dt
+        
+        potential_world_x = self.world_x + move_x_amount
+        if move_x_amount > 0:
+            leading_edge_check_x = self.world_x + (self.rect.width / 2) + move_x_amount
+        elif move_x_amount < 0:
+            leading_edge_check_x = self.world_x - (self.rect.width / 2) + move_x_amount
+        else:
+            leading_edge_check_x = self.world_x
+        
+        target_tile_x_idx = int(leading_edge_check_x / game_map_instance.tile_pixel_width)
+        current_center_tile_y_idx = int(self.world_y / game_map_instance.tile_pixel_height)
 
-        # --- Boundary Checking ---
-        # Prevent the player from moving off the screen
-        if self.rect.right > SCREEN_WIDTH:
-            self.rect.right = SCREEN_WIDTH
-        if self.rect.left < 0:
-            self.rect.left = 0
-        if self.rect.bottom > SCREEN_HEIGHT:
-            self.rect.bottom = SCREEN_HEIGHT
-        if self.rect.top < 0:
-            self.rect.top = 0
+        if game_map_instance.is_tile_walkable(target_tile_x_idx, current_center_tile_y_idx):
+            self.world_x = potential_world_x
+        else:
+            if move_x_amount > 0:
+                self.world_x = (target_tile_x_idx * game_map_instance.tile_pixel_width) - (self.rect.width / 2) - 0.01
+            elif move_x_amount < 0:
+                self.world_x = ((target_tile_x_idx + 1) * game_map_instance.tile_pixel_width) + (self.rect.width / 2) + 0.01
+        
+        potential_world_y = self.world_y + move_y_amount
+        if move_y_amount > 0:
+            leading_edge_check_y = self.world_y + (self.rect.height / 2) + move_y_amount
+        elif move_y_amount < 0:
+            leading_edge_check_y = self.world_y - (self.rect.height / 2) + move_y_amount
+        else:
+            leading_edge_check_y = self.world_y
+            
+        current_center_tile_x_idx = int(self.world_x / game_map_instance.tile_pixel_width)
+        target_tile_y_idx = int(leading_edge_check_y / game_map_instance.tile_pixel_height)
 
-    # --- Movement Methods ---
-    def go_left(self):
-        """ Set horizontal speed to move left """
-        self.change_x = -PLAYER_SPEED
+        if game_map_instance.is_tile_walkable(current_center_tile_x_idx, target_tile_y_idx):
+            self.world_y = potential_world_y
+        else:
+            if move_y_amount > 0:
+                self.world_y = (target_tile_y_idx * game_map_instance.tile_pixel_height) - (self.rect.height / 2) - 0.01
+            elif move_y_amount < 0:
+                self.world_y = ((target_tile_y_idx + 1) * game_map_instance.tile_pixel_height) + (self.rect.height / 2) + 0.01
 
-    def go_right(self):
-        """ Set horizontal speed to move right """
-        self.change_x = PLAYER_SPEED
+        if game_map_instance and game_map_instance.full_map_pixel_width > 0:
+            player_half_width = self.rect.width / 2
+            player_half_height = self.rect.height / 2
+            self.world_x = max(player_half_width, min(self.world_x, game_map_instance.full_map_pixel_width - player_half_width))
+            self.world_y = max(player_half_height, min(self.world_y, game_map_instance.full_map_pixel_height - player_half_height))
 
-    def go_up(self):
-        """ Set vertical speed to move up """
-        self.change_y = -PLAYER_SPEED
+        self.rect.center = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
 
-    def go_down(self):
-        """ Set vertical speed to move down """
-        self.change_y = PLAYER_SPEED
-
-    def stop_x(self):
-        """ Stop horizontal movement """
-        self.change_x = 0
-
-    def stop_y(self):
-        """ Stop vertical movement """
-        self.change_y = 0
+    def set_movement_direction(self, input_direction_vector):
+        self.direction = input_direction_vector
 
 # --- Main Function ---
 def main():
-    """ Main program function """
-    pygame.init() # Initialize all Pygame modules
-
-    # --- Screen Setup ---
+    pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Campus Navigator Challenge - Phase 1")
+    pygame.display.set_caption("Campus Navigator")
+    clock = pygame.time.Clock()
 
-    # --- Controller Setup ---
-    joysticks = []
-    # Check for available joysticks and initialize them
-    for i in range(pygame.joystick.get_count()):
-        joystick = pygame.joystick.Joystick(i)
-        joystick.init()
-        joysticks.append(joystick)
-        print(f"Detected Joystick {i}: {joystick.get_name()}")
+    # --- Create Map ---
+    game_map = Map(screen, "tiles")
+    
+    if not game_map.tile_filenames_grid or not game_map.collision_grid:
+        print("Map data or collision grid failed to load properly. Exiting.")
+        if game_map.collision_grid is None:
+            print("Collision grid specifically is None.")
+        elif not game_map.collision_grid:
+             print("Collision grid specifically is empty.")
+        pygame.quit()
+        sys.exit()
 
-    if not joysticks:
-        print("No joysticks detected. Using keyboard controls.")
+    # --- Determine Player Starting Position ---
+    initial_player_world_x = game_map.full_map_pixel_width / 2  # Default
+    initial_player_world_y = game_map.full_map_pixel_height / 2 # Default
+
+    # Preferred starting tile (e.g., top-right corner of the tile grid)
+    # Ensure map dimensions are valid before calculating preferred start
+    if game_map.grid_width_in_tiles > 0 and game_map.grid_height_in_tiles > 0:
+        preferred_start_tile_x = game_map.grid_width_in_tiles - 1
+        preferred_start_tile_y = 0
+        
+        found_start_tile_coords = None
+        max_search_radius = max(game_map.grid_width_in_tiles, game_map.grid_height_in_tiles)
+
+        for r in range(max_search_radius): # r is the radius of the square spiral layer
+            # Check preferred point itself at radius 0
+            if r == 0:
+                cx, cy = preferred_start_tile_x, preferred_start_tile_y
+                if 0 <= cx < game_map.grid_width_in_tiles and \
+                   0 <= cy < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(cx, cy):
+                    found_start_tile_coords = (cx, cy)
+                    break
+                continue # Skip to next radius if r=0 and preferred is not walkable
+
+            # Search points in a square layer around preferred_start_tile_x, preferred_start_tile_y
+            # Top row of the layer: (preferred_start_tile_y - r)
+            # Bottom row: (preferred_start_tile_y + r)
+            # Left col: (preferred_start_tile_x - r)
+            # Right col: (preferred_start_tile_x + r)
+            
+            # Iterate over the perimeter of the square layer
+            # (min_x, max_x), (min_y, max_y) define the current search square
+            min_x = preferred_start_tile_x - r
+            max_x = preferred_start_tile_x + r
+            min_y = preferred_start_tile_y - r
+            max_y = preferred_start_tile_y + r
+
+            # Check top & bottom rows
+            for cur_x in range(min_x, max_x + 1):
+                # Top row
+                if 0 <= cur_x < game_map.grid_width_in_tiles and \
+                   0 <= min_y < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(cur_x, min_y):
+                    found_start_tile_coords = (cur_x, min_y)
+                    break
+                # Bottom row
+                if 0 <= cur_x < game_map.grid_width_in_tiles and \
+                   0 <= max_y < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(cur_x, max_y):
+                    found_start_tile_coords = (cur_x, max_y)
+                    break
+            if found_start_tile_coords: break
+            
+            # Check left & right columns (excluding corners already checked by top/bottom rows)
+            for cur_y in range(min_y + 1, max_y): # +1 and exclusive max_y to avoid corners
+                # Left col
+                if 0 <= min_x < game_map.grid_width_in_tiles and \
+                   0 <= cur_y < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(min_x, cur_y):
+                    found_start_tile_coords = (min_x, cur_y)
+                    break
+                # Right col
+                if 0 <= max_x < game_map.grid_width_in_tiles and \
+                   0 <= cur_y < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(max_x, cur_y):
+                    found_start_tile_coords = (max_x, cur_y)
+                    break
+            if found_start_tile_coords: break
+
+        if found_start_tile_coords:
+            start_tile_x, start_tile_y = found_start_tile_coords
+            initial_player_world_x = (start_tile_x * game_map.tile_pixel_width) + (game_map.tile_pixel_width / 2)
+            initial_player_world_y = (start_tile_y * game_map.tile_pixel_height) + (game_map.tile_pixel_height / 2)
+            print(f"Player starting on walkable tile: ({start_tile_x}, {start_tile_y}) at world coordinates: ({initial_player_world_x:.1f}, {initial_player_world_y:.1f})")
+        else:
+            print(f"Warning: No walkable starting tile found near preferred top-right ({preferred_start_tile_x}, {preferred_start_tile_y}). Using default map center.")
+            # Defaulting to map center if no suitable spot is found (already set above)
     else:
-        print("Joystick detected. Keyboard controls also available.")
+        print("Warning: Map grid dimensions are not valid. Player starting at default screen center.")
+        # Defaulting to map center if map dimensions are not valid (already set above)
 
 
-    # --- Sprite Management ---
-    all_sprites_list = pygame.sprite.Group()
+    player = Player(initial_player_world_x, initial_player_world_y)
+    all_sprites = pygame.sprite.Group(player) 
 
-    # --- Create Player Instance ---
-    player = Player()
-    all_sprites_list.add(player) # Add the player to the sprite group
+    running = True
+    pygame.event.set_allowed([pygame.QUIT, pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEBUTTONDOWN])
 
-    # --- Game Loop Variables ---
-    running = True # Controls the main game loop
-    clock = pygame.time.Clock() # Used to control game frame rate
-
-    # -------- Main Program Loop -----------
     while running:
-        # --- Event Processing ---
+        dt = clock.tick(60) / 1000.0 
+
         for event in pygame.event.get():
-            if event.type == pygame.QUIT: # User clicked the close button
+            if event.type == pygame.QUIT:
                 running = False
-
-            # --- Joystick Input Handling ---
-            if joysticks:
-                # Analog stick movement
-                if event.type == pygame.JOYAXISMOTION:
-                    if event.axis == 0: # Horizontal axis
-                        if math.fabs(event.value) > JOYSTICK_DEADZONE:
-                            if event.value < 0: player.go_left()
-                            else: player.go_right()
-                        else: player.stop_x()
-                    elif event.axis == 1: # Vertical axis
-                        if math.fabs(event.value) > JOYSTICK_DEADZONE:
-                            if event.value < 0: player.go_up()
-                            else: player.go_down()
-                        else: player.stop_y()
-
-                # D-Pad (Hat) movement
-                elif event.type == pygame.JOYHATMOTION:
-                    hat_x, hat_y = event.value
-                    # Horizontal D-pad
-                    if hat_x == -1: player.go_left()
-                    elif hat_x == 1: player.go_right()
-                    else:
-                         # Stop only if not also moving via analog stick's X axis
-                         is_analog_x_active = any(math.fabs(j.get_axis(0)) > JOYSTICK_DEADZONE for j in joysticks)
-                         if not is_analog_x_active:
-                              player.stop_x()
-
-                    # Vertical D-pad (Inverted Y)
-                    if hat_y == 1: player.go_up()
-                    elif hat_y == -1: player.go_down()
-                    else:
-                         # Stop only if not also moving via analog stick's Y axis
-                         is_analog_y_active = any(math.fabs(j.get_axis(1)) > JOYSTICK_DEADZONE for j in joysticks)
-                         if not is_analog_y_active:
-                              player.stop_y()
-
-            # --- Keyboard Input Handling (Fallback / Alternative) ---
-            if event.type == pygame.KEYDOWN: # A key is pressed down
-                if event.key == pygame.K_LEFT:
-                    player.go_left()
-                elif event.key == pygame.K_RIGHT:
-                    player.go_right()
-                elif event.key == pygame.K_UP:
-                    player.go_up()
-                elif event.key == pygame.K_DOWN:
-                    player.go_down()
-                elif event.key == pygame.K_ESCAPE: # Allow quitting with Esc key
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
                     running = False
+                elif event.key == pygame.K_EQUALS or event.key == pygame.K_PLUS:
+                    game_map.zoom(ZOOM_SPEED_MULTIPLIER, player.rect.centerx, player.rect.centery)
+                elif event.key == pygame.K_MINUS:
+                    game_map.zoom(1 / ZOOM_SPEED_MULTIPLIER, player.rect.centerx, player.rect.centery)
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                mouse_pos = pygame.mouse.get_pos()
+                if event.button == 4: 
+                    game_map.zoom(ZOOM_SPEED_MULTIPLIER, mouse_pos[0], mouse_pos[1])
+                elif event.button == 5: 
+                    game_map.zoom(1 / ZOOM_SPEED_MULTIPLIER, mouse_pos[0], mouse_pos[1])
+        
+        keys = pygame.key.get_pressed()
+        current_direction = pygame.math.Vector2(0, 0)
+        if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+            current_direction.x -= 1
+        if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+            current_direction.x += 1
+        if keys[pygame.K_UP] or keys[pygame.K_w]:
+            current_direction.y -= 1
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+            current_direction.y += 1
+        player.set_movement_direction(current_direction)
 
-            elif event.type == pygame.KEYUP: # A key is released
-                # Stop movement only if the released key corresponds to the current direction
-                # and no other movement key in that axis is still pressed
-                # (This prevents stopping if holding Left then press/release Right)
-                # A simpler approach is just to stop if the key matches the direction,
-                # assuming only one key/direction is primary at a time for keyboard.
+        player.update(dt, game_map) 
+        
+        game_map.offset_x = player.rect.centerx - (player.world_x * game_map.zoom_level)
+        game_map.offset_y = player.rect.centery - (player.world_y * game_map.zoom_level)
 
-                if event.key == pygame.K_LEFT and player.change_x < 0:
-                    player.stop_x()
-                elif event.key == pygame.K_RIGHT and player.change_x > 0:
-                    player.stop_x()
-                elif event.key == pygame.K_UP and player.change_y < 0:
-                    player.stop_y()
-                elif event.key == pygame.K_DOWN and player.change_y > 0:
-                    player.stop_y()
-
-
-        # --- Game Logic ---
-        all_sprites_list.update() # Calls the update() method on all sprites
-
-        # --- Drawing Code ---
-        screen.fill(WHITE) # Draw the background
-        all_sprites_list.draw(screen) # Draw all sprites
-
-        # --- Update Screen ---
+        screen.fill(WHITE) 
+        game_map.draw() 
+        all_sprites.draw(screen) 
+        
         pygame.display.flip()
 
-        # --- Limit frames per second ---
-        clock.tick(60) # 60 FPS
-
-    # Close the window and quit.
     pygame.quit()
     sys.exit()
 
 if __name__ == "__main__":
-    main()
+    tiles_dir = "tiles"
+    meta_file = os.path.join(tiles_dir, "map_meta.json")
+
+    if not os.path.exists(meta_file):
+        print(f"Error: Metadata file '{meta_file}' not found.")
+        print(f"Please run 'python convert_map_to_tiles.py' first.")
+        print(f"Ensure 'campus_map.png' (or your map image) and 'convert_map_to_tiles.py' are configured correctly.")
+        
+        map_image_for_conversion = "campus_map.png" # Assuming this is the name of your map image
+        tile_size_for_conversion = REFERENCE_TILE_SIZE 
+        if os.path.exists(map_image_for_conversion):
+            print(f"\nFound '{map_image_for_conversion}'. Attempting to generate tiles now...")
+            try:
+                from convert_map_to_tiles import convert_map_to_tiles as tile_converter_func
+                tile_converter_func(
+                    map_image_for_conversion,
+                    tile_size_for_conversion,
+                    tile_size_for_conversion, 
+                    tiles_dir
+                )
+                if os.path.exists(meta_file):
+                    print("\nTile generation successful. Please try running main.py again.")
+                else:
+                    print("\nTile generation might have failed. Check output from convert_map_to_tiles.")
+            except ImportError:
+                print("Could not import 'convert_map_to_tiles'. Please run it manually.")
+            except Exception as e:
+                print(f"An error occurred during automatic tile generation: {e}")
+        sys.exit()
+    else:
+        main()
