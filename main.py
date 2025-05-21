@@ -6,11 +6,8 @@ from map_class import Map # Assuming map_class.py is in the same directory
 # --- Constants ---
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
-# TILE_SIZE is now primarily for reference or if game logic needs a fixed tile dimension.
-# The actual tile dimensions are loaded from map_meta.json by the Map class.
-# Ensure this matches the size used in convert_map_to_tiles.py (e.g., 64).
-REFERENCE_TILE_SIZE = 64
-ZOOM_SPEED_MULTIPLIER = 1.1 # Factor for zooming in/out
+REFERENCE_TILE_SIZE = 32 # Ensure this matches the size used in convert_map_to_tiles.py
+ZOOM_SPEED_MULTIPLIER = 1.1
 
 # --- Colors ---
 WHITE = (255, 255, 255)
@@ -22,72 +19,64 @@ class Player(pygame.sprite.Sprite):
         super().__init__()
         self.image = pygame.Surface([20, 20]) # Visual size of player
         self.image.fill(BLUE)
-        self.image.set_colorkey((0,0,0)) # Optional: if you want a black background to be transparent
-        # self.image = pygame.transform.scale(pygame.image.load("player_sprite.png").convert_alpha(), (20,20)) # Example with sprite
+        self.image.set_colorkey((0,0,0)) 
 
-        # The rect is for drawing the player AT THE SCREEN CENTER
         self.rect = self.image.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
-
-        # Player's precise position in the game world (in pixels, not tiles)
         self.world_x = float(initial_world_x)
         self.world_y = float(initial_world_y)
-        
-        self.speed = 200 # World pixels per second
+        self.speed = 200
         self.direction = pygame.math.Vector2(0, 0)
 
-    # Inside Player class in main.py
-    def update(self, dt, game_map_instance): # dt is delta time
+    def update(self, dt, game_map_instance):
         if self.direction.length_squared() == 0:
-            return # No movement requested
+            return
 
-        normalized_direction = self.direction.normalize()
+        try:
+            normalized_direction = self.direction.normalize()
+        except ValueError:
+            normalized_direction = pygame.math.Vector2(0, 0)
 
-        # --- Proposed new position ---
-        # Calculate how much the player *wants* to move
         move_x_amount = normalized_direction.x * self.speed * dt
         move_y_amount = normalized_direction.y * self.speed * dt
-
-        new_world_x = self.world_x + move_x_amount
-        new_world_y = self.world_y # Check X movement first
-
-        # --- Collision Detection for X-axis ---
-        # Determine the tile the player would be moving into
-        # Consider player's bounding box for more accuracy, for now, center point is simpler
-        # For better collision, you might want to check multiple points on the player's bounding box
-
-        # Get current tile of player
-        current_tile_x_idx = int(self.world_x / game_map_instance.tile_pixel_width)
-        current_tile_y_idx = int(self.world_y / game_map_instance.tile_pixel_height)
-
-        # Get target tile based on new_world_x
-        target_tile_for_x_move_idx = int(new_world_x / game_map_instance.tile_pixel_width)
-
-        if game_map_instance.is_tile_walkable(target_tile_for_x_move_idx, current_tile_y_idx):
-            self.world_x = new_world_x # Allow X movement
+        
+        potential_world_x = self.world_x + move_x_amount
+        if move_x_amount > 0:
+            leading_edge_check_x = self.world_x + (self.rect.width / 2) + move_x_amount
+        elif move_x_amount < 0:
+            leading_edge_check_x = self.world_x - (self.rect.width / 2) + move_x_amount
         else:
-            # If moving into a wall on X, snap to edge of current tile or wall tile
-            # This prevents slight overlap.
-            if move_x_amount > 0: # Moving right
-                self.world_x = (target_tile_for_x_move_idx * game_map_instance.tile_pixel_width) - (self.rect.width / 2) - 0.1 # Epsilon
-            elif move_x_amount < 0: # Moving left
-                self.world_x = ((current_tile_x_idx) * game_map_instance.tile_pixel_width) + (self.rect.width / 2) + 0.1 # Epsilon
+            leading_edge_check_x = self.world_x
+        
+        target_tile_x_idx = int(leading_edge_check_x / game_map_instance.tile_pixel_width)
+        current_center_tile_y_idx = int(self.world_y / game_map_instance.tile_pixel_height)
 
-
-        # --- Collision Detection for Y-axis ---
-        new_world_y = self.world_y + move_y_amount # Reset for Y check based on potentially updated self.world_x
-        current_tile_x_idx = int(self.world_x / game_map_instance.tile_pixel_width) # Re-evaluate current X tile
-        target_tile_for_y_move_idx = int(new_world_y / game_map_instance.tile_pixel_height)
-
-        if game_map_instance.is_tile_walkable(current_tile_x_idx, target_tile_for_y_move_idx):
-            self.world_y = new_world_y # Allow Y movement
+        if game_map_instance.is_tile_walkable(target_tile_x_idx, current_center_tile_y_idx):
+            self.world_x = potential_world_x
         else:
-            # If moving into a wall on Y, snap to edge
-            if move_y_amount > 0: # Moving down
-                self.world_y = (target_tile_for_y_move_idx * game_map_instance.tile_pixel_height) - (self.rect.height / 2) - 0.1
-            elif move_y_amount < 0: # Moving up
-                self.world_y = ((current_tile_y_idx) * game_map_instance.tile_pixel_height) + (self.rect.height / 2) + 0.1
+            if move_x_amount > 0:
+                self.world_x = (target_tile_x_idx * game_map_instance.tile_pixel_width) - (self.rect.width / 2) - 0.01
+            elif move_x_amount < 0:
+                self.world_x = ((target_tile_x_idx + 1) * game_map_instance.tile_pixel_width) + (self.rect.width / 2) + 0.01
+        
+        potential_world_y = self.world_y + move_y_amount
+        if move_y_amount > 0:
+            leading_edge_check_y = self.world_y + (self.rect.height / 2) + move_y_amount
+        elif move_y_amount < 0:
+            leading_edge_check_y = self.world_y - (self.rect.height / 2) + move_y_amount
+        else:
+            leading_edge_check_y = self.world_y
+            
+        current_center_tile_x_idx = int(self.world_x / game_map_instance.tile_pixel_width)
+        target_tile_y_idx = int(leading_edge_check_y / game_map_instance.tile_pixel_height)
 
-        # Optional: Clamp player to map boundaries (already present, keep it)
+        if game_map_instance.is_tile_walkable(current_center_tile_x_idx, target_tile_y_idx):
+            self.world_y = potential_world_y
+        else:
+            if move_y_amount > 0:
+                self.world_y = (target_tile_y_idx * game_map_instance.tile_pixel_height) - (self.rect.height / 2) - 0.01
+            elif move_y_amount < 0:
+                self.world_y = ((target_tile_y_idx + 1) * game_map_instance.tile_pixel_height) + (self.rect.height / 2) + 0.01
+
         if game_map_instance and game_map_instance.full_map_pixel_width > 0:
             player_half_width = self.rect.width / 2
             player_half_height = self.rect.height / 2
@@ -99,7 +88,6 @@ class Player(pygame.sprite.Sprite):
     def set_movement_direction(self, input_direction_vector):
         self.direction = input_direction_vector
 
-
 # --- Main Function ---
 def main():
     pygame.init()
@@ -108,28 +96,107 @@ def main():
     clock = pygame.time.Clock()
 
     # --- Create Map ---
-    # "tiles" is the directory where map_meta.json and tile images are expected.
     game_map = Map(screen, "tiles")
     
-    if not game_map.tile_filenames_grid: # Check if map metadata loaded successfully
-        print("Map data failed to load properly. Exiting.")
+    if not game_map.tile_filenames_grid or not game_map.collision_grid:
+        print("Map data or collision grid failed to load properly. Exiting.")
+        if game_map.collision_grid is None:
+            print("Collision grid specifically is None.")
+        elif not game_map.collision_grid:
+             print("Collision grid specifically is empty.")
         pygame.quit()
         sys.exit()
 
-    # --- Create Player ---
-    # Start player in the center of the map (world coordinates)
-    initial_player_world_x = game_map.full_map_pixel_width / 2
-    initial_player_world_y = game_map.full_map_pixel_height / 2
-    player = Player(initial_player_world_x, initial_player_world_y)
-    
-    all_sprites = pygame.sprite.Group(player) # Group for easy drawing/updating
+    # --- Determine Player Starting Position ---
+    initial_player_world_x = game_map.full_map_pixel_width / 2  # Default
+    initial_player_world_y = game_map.full_map_pixel_height / 2 # Default
 
-    # --- Game Loop ---
+    # Preferred starting tile (e.g., top-right corner of the tile grid)
+    # Ensure map dimensions are valid before calculating preferred start
+    if game_map.grid_width_in_tiles > 0 and game_map.grid_height_in_tiles > 0:
+        preferred_start_tile_x = game_map.grid_width_in_tiles - 1
+        preferred_start_tile_y = 0
+        
+        found_start_tile_coords = None
+        max_search_radius = max(game_map.grid_width_in_tiles, game_map.grid_height_in_tiles)
+
+        for r in range(max_search_radius): # r is the radius of the square spiral layer
+            # Check preferred point itself at radius 0
+            if r == 0:
+                cx, cy = preferred_start_tile_x, preferred_start_tile_y
+                if 0 <= cx < game_map.grid_width_in_tiles and \
+                   0 <= cy < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(cx, cy):
+                    found_start_tile_coords = (cx, cy)
+                    break
+                continue # Skip to next radius if r=0 and preferred is not walkable
+
+            # Search points in a square layer around preferred_start_tile_x, preferred_start_tile_y
+            # Top row of the layer: (preferred_start_tile_y - r)
+            # Bottom row: (preferred_start_tile_y + r)
+            # Left col: (preferred_start_tile_x - r)
+            # Right col: (preferred_start_tile_x + r)
+            
+            # Iterate over the perimeter of the square layer
+            # (min_x, max_x), (min_y, max_y) define the current search square
+            min_x = preferred_start_tile_x - r
+            max_x = preferred_start_tile_x + r
+            min_y = preferred_start_tile_y - r
+            max_y = preferred_start_tile_y + r
+
+            # Check top & bottom rows
+            for cur_x in range(min_x, max_x + 1):
+                # Top row
+                if 0 <= cur_x < game_map.grid_width_in_tiles and \
+                   0 <= min_y < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(cur_x, min_y):
+                    found_start_tile_coords = (cur_x, min_y)
+                    break
+                # Bottom row
+                if 0 <= cur_x < game_map.grid_width_in_tiles and \
+                   0 <= max_y < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(cur_x, max_y):
+                    found_start_tile_coords = (cur_x, max_y)
+                    break
+            if found_start_tile_coords: break
+            
+            # Check left & right columns (excluding corners already checked by top/bottom rows)
+            for cur_y in range(min_y + 1, max_y): # +1 and exclusive max_y to avoid corners
+                # Left col
+                if 0 <= min_x < game_map.grid_width_in_tiles and \
+                   0 <= cur_y < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(min_x, cur_y):
+                    found_start_tile_coords = (min_x, cur_y)
+                    break
+                # Right col
+                if 0 <= max_x < game_map.grid_width_in_tiles and \
+                   0 <= cur_y < game_map.grid_height_in_tiles and \
+                   game_map.is_tile_walkable(max_x, cur_y):
+                    found_start_tile_coords = (max_x, cur_y)
+                    break
+            if found_start_tile_coords: break
+
+        if found_start_tile_coords:
+            start_tile_x, start_tile_y = found_start_tile_coords
+            initial_player_world_x = (start_tile_x * game_map.tile_pixel_width) + (game_map.tile_pixel_width / 2)
+            initial_player_world_y = (start_tile_y * game_map.tile_pixel_height) + (game_map.tile_pixel_height / 2)
+            print(f"Player starting on walkable tile: ({start_tile_x}, {start_tile_y}) at world coordinates: ({initial_player_world_x:.1f}, {initial_player_world_y:.1f})")
+        else:
+            print(f"Warning: No walkable starting tile found near preferred top-right ({preferred_start_tile_x}, {preferred_start_tile_y}). Using default map center.")
+            # Defaulting to map center if no suitable spot is found (already set above)
+    else:
+        print("Warning: Map grid dimensions are not valid. Player starting at default screen center.")
+        # Defaulting to map center if map dimensions are not valid (already set above)
+
+
+    player = Player(initial_player_world_x, initial_player_world_y)
+    all_sprites = pygame.sprite.Group(player) 
+
     running = True
-    pygame.event.set_allowed([pygame.QUIT, pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEBUTTONDOWN]) # Optimize event handling
+    pygame.event.set_allowed([pygame.QUIT, pygame.KEYDOWN, pygame.KEYUP, pygame.MOUSEBUTTONDOWN])
 
     while running:
-        dt = clock.tick(60) / 1000.0  # Delta time in seconds (for frame-rate independence)
+        dt = clock.tick(60) / 1000.0 
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -137,23 +204,17 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                # Zooming with + and - keys (or = for +)
                 elif event.key == pygame.K_EQUALS or event.key == pygame.K_PLUS:
-                     # Zoom in, focused on player's screen position (center)
                     game_map.zoom(ZOOM_SPEED_MULTIPLIER, player.rect.centerx, player.rect.centery)
                 elif event.key == pygame.K_MINUS:
-                     # Zoom out, focused on player's screen position (center)
                     game_map.zoom(1 / ZOOM_SPEED_MULTIPLIER, player.rect.centerx, player.rect.centery)
-
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                # Mouse wheel zoom
                 mouse_pos = pygame.mouse.get_pos()
-                if event.button == 4:  # Scroll up (zoom in)
+                if event.button == 4: 
                     game_map.zoom(ZOOM_SPEED_MULTIPLIER, mouse_pos[0], mouse_pos[1])
-                elif event.button == 5:  # Scroll down (zoom out)
+                elif event.button == 5: 
                     game_map.zoom(1 / ZOOM_SPEED_MULTIPLIER, mouse_pos[0], mouse_pos[1])
         
-        # Handle continuous key presses for movement
         keys = pygame.key.get_pressed()
         current_direction = pygame.math.Vector2(0, 0)
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
@@ -166,59 +227,43 @@ def main():
             current_direction.y += 1
         player.set_movement_direction(current_direction)
 
-        # --- Game Logic Update ---
-        player.update(dt, game_map) # Player moves in the world
-
-        # --- Update Map Offset to Center Player on Screen ---
-        # The map's top-left corner (offset_x, offset_y) needs to be positioned such that
-        # the player's world coordinates (player.world_x, player.world_y)
-        # end up at the player's screen rect center (SCREEN_WIDTH/2, SCREEN_HEIGHT/2).
-        #
-        # ScreenX = WorldX * Zoom + OffsetX
-        # PlayerScreenX = PlayerWorldX * Zoom + OffsetX
-        # OffsetX = PlayerScreenX - (PlayerWorldX * Zoom)
+        player.update(dt, game_map) 
         
         game_map.offset_x = player.rect.centerx - (player.world_x * game_map.zoom_level)
         game_map.offset_y = player.rect.centery - (player.world_y * game_map.zoom_level)
 
-        # --- Drawing ---
-        screen.fill(WHITE)    # Clear screen
-        game_map.draw()       # Draw the map with current offset and zoom
-        all_sprites.draw(screen) # Draw player (and any other sprites)
+        screen.fill(WHITE) 
+        game_map.draw() 
+        all_sprites.draw(screen) 
         
-        pygame.display.flip() # Update the full display
+        pygame.display.flip()
 
     pygame.quit()
     sys.exit()
 
 if __name__ == "__main__":
-    # Crucial Check: Ensure tiles and metadata exist before starting the game.
     tiles_dir = "tiles"
     meta_file = os.path.join(tiles_dir, "map_meta.json")
 
     if not os.path.exists(meta_file):
         print(f"Error: Metadata file '{meta_file}' not found.")
         print(f"Please run 'python convert_map_to_tiles.py' first.")
-        print(f"Ensure 'campus_map.jpg' (or your map image) and 'convert_map_to_tiles.py' are configured correctly.")
+        print(f"Ensure 'campus_map.png' (or your map image) and 'convert_map_to_tiles.py' are configured correctly.")
         
-        # Optional: Attempt to generate tiles if the map image exists
-        # This part is a convenience and might need adjustment based on your project structure
-        map_image_for_conversion = "campus_map.jpg" # Must match the one in convert_map_to_tiles.py
-        tile_size_for_conversion = REFERENCE_TILE_SIZE # Must match
+        map_image_for_conversion = "campus_map.png" # Assuming this is the name of your map image
+        tile_size_for_conversion = REFERENCE_TILE_SIZE 
         if os.path.exists(map_image_for_conversion):
             print(f"\nFound '{map_image_for_conversion}'. Attempting to generate tiles now...")
             try:
-                # Directly call the function from the other script
-                # This requires convert_map_to_tiles.py to be importable
                 from convert_map_to_tiles import convert_map_to_tiles as tile_converter_func
                 tile_converter_func(
                     map_image_for_conversion,
                     tile_size_for_conversion,
-                    tile_size_for_conversion, # Assuming square tiles
+                    tile_size_for_conversion, 
                     tiles_dir
                 )
                 if os.path.exists(meta_file):
-                     print("\nTile generation successful. Please try running main.py again.")
+                    print("\nTile generation successful. Please try running main.py again.")
                 else:
                     print("\nTile generation might have failed. Check output from convert_map_to_tiles.")
             except ImportError:
